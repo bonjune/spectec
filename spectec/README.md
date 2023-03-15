@@ -9,7 +9,7 @@ The goal is to have a unified source that is simple to
 
 * _process_ to generate other formats from.
 
-Because this DSL can transport sufficient domain knowledge, various artefacts could be generated through dedicated backends:
+Because this DSL can transport sufficient domain knowledge, various artifacts could be generated through dedicated backends:
 
 * the _Latex_ for the formal specification for the spec document,
 
