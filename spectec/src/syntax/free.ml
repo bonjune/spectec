@@ -19,6 +19,7 @@ let rec free_typ typ =
   match typ.it with
   | VarT id -> free_id id
   | AtomT _ | BoolT | NatT | TextT -> Set.empty
+  | ParenT typ -> free_typ typ
   | SeqT typs | BrackT (_, typs) -> free_list free_typ typs
   | StrT typfields -> free_list free_typfield typfields
   | TupT typs -> free_list free_typ typs
@@ -47,13 +48,16 @@ and free_exp exp =
   match exp.it with
   | VarE id -> free_id id
   | AtomE _ | BoolE _ | NatE _ | TextE _ | HoleE -> Set.empty
-  | UnE (_, exp1) | DotE (exp1, _) | LenE exp1 | CallE (_, exp1)-> free_exp exp1
+  | UnE (_, exp1) | DotE (exp1, _) | LenE exp1 | CallE (_, exp1)
+  | ParenE exp1 | SubE (exp1, _, _) -> free_exp exp1
   | BinE (exp1, _, exp2) | CmpE (exp1, _, exp2)
   | IdxE (exp1, exp2) | CommaE (exp1, exp2) | CompE (exp1, exp2)
-  | RelE (exp1, _, exp2) | CatE (exp1, exp2) ->
+  | RelE (exp1, _, exp2) | CatE (exp1, exp2) | FuseE (exp1, exp2) ->
     free_list free_exp [exp1; exp2]
   | SliceE (exp1, exp2, exp3) -> free_list free_exp [exp1; exp2; exp3]
-  | SeqE exps | TupE exps | BrackE (_, exps) -> free_list free_exp exps
+  | OptE expo -> free_opt free_exp expo
+  | SeqE exps | TupE exps | BrackE (_, exps) | ListE exps | CaseE (_, exps) ->
+    free_list free_exp exps
   | UpdE (exp1, path, exp2) | ExtE (exp1, path, exp2) ->
     Set.union (free_list free_exp [exp1; exp2]) (free_path path)
   | StrE expfields -> free_list free_expfield expfields

@@ -66,8 +66,7 @@ let rec expand' env = function
     | StructT typfields -> StrT typfields
     | _ -> typ'
     )
-  | TupT [] -> SeqT []
-  | TupT [typ] -> expand' env typ.it
+  | ParenT typ -> expand' env typ.it
   | typ' -> typ'
 
 let expand_singular' env typ' =
@@ -118,10 +117,39 @@ let is_variant_typ = is_x_typ as_variant_typ
 
 (* Type Matching *)
 
+let equiv_list equiv_x xs1 xs2 =
+  List.length xs1 = List.length xs2 && List.for_all2 equiv_x xs1 xs2
+
+let rec equiv_typ env typ1 typ2 =
+  (*
+  Printf.printf "[equiv] (%s) == (%s)  eq=%b\n%!"
+    (Print.string_of_typ typ1) (Print.string_of_typ typ2)
+    (typ1.it = typ2.it);
+  *)
+  typ1.it = typ2.it ||
+  match expand env typ1, expand env typ2 with
+  | VarT id1, VarT id2 -> id1.it = id2.it
+  | SeqT typs1, SeqT typs2
+  | TupT typs1, TupT typs2 ->
+    equiv_list (equiv_typ env) typs1 typs2
+  | StrT fields1, StrT fields2 ->
+    equiv_list (equiv_typfield env) fields1 fields2
+  | RelT (typ11, relop1, typ12), RelT (typ21, relop2, typ22) ->
+    equiv_typ env typ11 typ21 && relop1 = relop2 && equiv_typ env typ12 typ22
+  | BrackT (brackop1, typs1), BrackT (brackop2, typs2) ->
+    brackop1 = brackop2 && List.for_all2 (equiv_typ env) typs1 typs2
+  | IterT (typ11, iter1), IterT (typ21, iter2) ->
+    equiv_typ env typ11 typ21 && Eq.eq_iter iter1 iter2
+  | typ1', typ2' ->
+    Eq.eq_typ (typ1' @@ typ1.at) (typ2' @@ typ2.at)
+
+and equiv_typfield env (atom1, typ1, _) (atom2, typ2, _) =
+  atom1 = atom2 && equiv_typ env typ1 typ2
+
+
 let match_iter env iter1 iter2 =
   match iter1, iter2 with
   | _, List -> true
-  | Opt, List1 -> true
   | _, _ -> Eq.eq_iter iter1 iter2
 
 let rec match_typ' env typ1 typ2 =
@@ -132,7 +160,7 @@ let rec match_typ' env typ1 typ2 =
     (string_of_typ (expand env typ2 @@ typ2.at));
   *)
   match expand env typ1, expand env typ2 with
-  | typ1', typ2' when Eq.eq_typ (typ1' @@ typ1.at) (typ2' @@ typ2.at) ->
+  | typ1', typ2' when equiv_typ env (typ1' @@ typ1.at) (typ2' @@ typ2.at) ->
     true
   | StrT fields1, StrT fields2 ->
     List.for_all (fun (atom, typ2, _) ->
@@ -209,17 +237,17 @@ let match_typ phrase env typ1 typ2 at =
 
 (* Operators *)
 
-let check_unop = function
+let infer_unop = function
   | NotOp -> BoolT
   | PlusOp | MinusOp -> NatT
 
-let check_binop = function
+let infer_binop = function
   | AndOp | OrOp | ImplOp -> BoolT
   | AddOp | SubOp | MulOp | DivOp | ExpOp -> NatT
 
-let check_cmpop = function
-  | EqOp | NeOp -> VarT ("(any)" @@ no_region)
-  | LtOp | GtOp | LeOp | GeOp -> NatT
+let infer_cmpop = function
+  | EqOp | NeOp -> None
+  | LtOp | GtOp | LeOp | GeOp -> Some NatT
 
 
 (* Atom Bindings *)
@@ -262,6 +290,8 @@ and check_typ env typ =
   | StrT typfields ->
     List.iter (check_typfield env) typfields;
     check_atoms "record" "field" (fun (atom, _, _) -> atom) typfields typ.at
+  | ParenT typ ->
+    check_typ env typ
   | TupT typs ->
     List.iter (check_typ env) typs
   | RelT (typ1, relop, typ2) ->
@@ -273,7 +303,7 @@ and check_typ env typ =
     check_typ env typ1;
     check_iter env iter;
     match iter with
-    | ListN exp -> error exp.at "definite iterator not allowed in type"
+    | List1 | ListN _ -> error typ.at "illegal iterator for types"
     | _ -> ()
 
 and check_deftyp env deftyp =
@@ -320,13 +350,13 @@ and check_exp env exp : typ =
   | TextE text -> TextT @@ exp.at
   | UnE (unop, exp1) ->
     let typ1 = check_exp env exp1 in
-    let typ = check_unop unop @@ exp.at in
+    let typ = infer_unop unop @@ exp.at in
     match_typ "unary operator" env typ1 typ exp.at;
     typ
   | BinE (exp1, binop, exp2) ->
     let typ1 = check_exp env exp1 in
     let typ2 = check_exp env exp2 in
-    let typ = check_binop binop @@ exp.at in
+    let typ = infer_binop binop @@ exp.at in
     match_typ "binary operator left operand" env typ1 typ exp.at;
     match_typ "binary operator right operand" env typ2 typ exp.at;
     typ
@@ -334,9 +364,9 @@ and check_exp env exp : typ =
     let typ1 = check_exp env exp1 in
     let typ2 = check_exp env exp2 in
     let typ =
-      match check_cmpop cmpop with
-      | VarT {it = "(any)"; _} -> typ1
-      | typ' -> typ' @@ exp.at
+      match infer_cmpop cmpop with
+      | Some typ' -> typ' @@ exp.at
+      | None -> typ1
     in
     match_typ "binary operator left operand" env typ1 typ exp.at;
     let typ3 =
@@ -365,15 +395,13 @@ and check_exp env exp : typ =
     typ1
   | UpdE (exp1, path, exp2) ->
     let typ1 = check_exp env exp1 in
-    let typ = as_list_typ "expression" env typ1 exp1.at in
-    let typ2' = check_path env typ path in
+    let typ2' = check_path env typ1 path in
     let typ2 = check_exp env exp2 in
     match_typ "element" env typ2 typ2' exp.at;
     typ1
   | ExtE (exp1, path, exp2) ->
     let typ1 = check_exp env exp1 in
-    let typ = as_list_typ "expression" env typ1 exp1.at in
-    let typ2' = check_path env typ path in
+    let typ2' = check_path env typ1 path in
     let _ = as_list_typ "path" env typ2' path.at in
     let typ2 = check_exp env exp2 in
     match_typ "element" env typ2 typ2' exp.at;
@@ -408,6 +436,9 @@ and check_exp env exp : typ =
     let typ1 = check_exp env exp1 in
     let _ = as_list_typ "expression" env typ1 exp1.at in
     NatT @@ exp.at
+  | ParenE exp1 ->
+    let typ1 = check_exp env exp1 in
+    ParenT typ1 @@ exp.at
   | TupE exps ->
     let typs = List.map (check_exp env) exps in
     TupT typs @@ exp.at
@@ -432,10 +463,11 @@ and check_exp env exp : typ =
       | iter' -> iter'
     in
     IterT (typ1, iter') @@ exp.at
+  | OptE _ | ListE _ | CatE _ | CaseE _ | SubE _ -> assert false
   | HoleE ->
     error exp.at "misplaced hole"
-  | CatE _ ->
-    error exp.at "misplaced token concatenation"
+  | FuseE _ ->
+    error exp.at "misplaced token fuse"
 
 and check_expfield env (atom, exp) : typfield =
   let typ = check_exp env exp in
@@ -481,11 +513,11 @@ let infer_def env def =
 
 let check_def env def =
   match def.it with
-  | SynD (id, deftyp, hints) ->
+  | SynD (id, deftyp, _hints) ->
     check_deftyp env deftyp;
     env.typs <- rebind "syntax" env.typs id deftyp;
     env.vars <- bind "variable" env.vars id (VarT id @@ id.at)
-  | RelD (id, typ, hints) ->
+  | RelD (id, typ, _hints) ->
     check_typ env typ;
     env.rels <- bind "relation" env.rels id typ
   | RuleD (id, ids, exp, prems) ->
@@ -493,10 +525,10 @@ let check_def env def =
     let typ' = find "relation" env.rels id in
     match_typ "rule" env typ typ' exp.at;
     List.iter (check_prem env) prems
-  | VarD (id, typ, hints) ->
+  | VarD (id, typ, _hints) ->
     check_typ env typ;
     env.vars <- bind "variable" env.vars id typ
-  | DecD (id, exp1, typ2, hints) ->
+  | DecD (id, exp1, typ2, _hints) ->
     let typ1 = check_exp env exp1 in
     check_typ env typ2;
     env.defs <- bind "function" env.defs id (typ1, typ2)
