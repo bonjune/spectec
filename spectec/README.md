@@ -277,13 +277,15 @@ Currently, the implementation consists of merely the frontend, which performs:
 * parsing,
 * type checking,
 * multiplicity checking,
-* recursion analysis.
+* recursion analysis,
+* elaboration into more rigid sublanguage,
+* validation of elaboration result.
 
 
 ## Building and Running
 
-* You will need `ocaml` and `ocamlbuild` installed.
+* You will need `ocaml` and `dune` installed.
 
-* Go to `src` directory, and invoke `make` to build the executable.
+* Invoke `make` to build the executable.
 
-* In the same place, invoke `make test` to run it on the demo files from the `spec` directory.
+* In the same place, invoke `make test` to run it on the demo files from the `spec` directory:

@@ -1,5 +1,7 @@
-let name = "spasm"
-let version = "0.1"
+open Spectec
+
+let name = "watsup"
+let version = "0.2"
 
 let banner () =
   print_endline (name ^ " " ^ version ^ " generator")
@@ -8,8 +10,6 @@ let usage = "Usage: " ^ name ^ " [option] [file ...]"
 
 let args = ref []
 let add_arg source = args := !args @ [source]
-
-let quote s = "\"" ^ String.escaped s ^ "\""
 
 let argspec = Arg.align
 [
